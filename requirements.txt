@@ -1,0 +1,44 @@
+# SENTINEL - Python Backend & ML Pipeline
+# Core
+fastapi
+uvicorn[standard]
+websockets
+python-multipart
+
+# ML / Deep Learning
+torch
+torchvision
+ultralytics
+mediapipe
+opencv-python-headless
+numpy
+scipy
+scikit-learn
+pillow
+
+# Database
+sqlalchemy
+aiosqlite
+alembic
+
+# IoT / MQTT
+aiomqtt
+paho-mqtt
+
+# Notifications & HTTP
+httpx
+aiofiles
+
+# Utilities
+pydantic
+pydantic-settings
+python-dotenv
+rich
+click
+tqdm
+
+# Data & Augmentation
+albumentations
+matplotlib
+seaborn
+pandas

@@ -1,0 +1,1970 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SENTINEL — Autonomous Safety System v2.1</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js" crossorigin="anonymous"></script>
+<style>
+:root {
+  --green: #00ff41;
+  --green-dim: #00aa2a;
+  --yellow: #ffcc00;
+  --orange: #ff7700;
+  --red: #ff2020;
+  --bg: #060a06;
+  --panel: #080d08;
+  --border: #0a3a0a;
+  --text: #00ff41;
+  --text-dim: #007a20;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--green);
+  font-family: 'Share Tech Mono', monospace;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  position: relative;
+}
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.08) 0px,
+    rgba(0, 0, 0, 0.08) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+body.critical-state {
+  animation: criticalBorder 0.5s ease-in-out infinite alternate;
+}
+@keyframes criticalBorder {
+  from { box-shadow: inset 0 0 30px rgba(255, 32, 32, 0.3); }
+  to { box-shadow: inset 0 0 60px rgba(255, 32, 32, 0.6); }
+}
+body.weapon-strobe::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: rgba(255, 0, 0, 0.15);
+  z-index: 9998;
+  pointer-events: none;
+  animation: weaponStrobe 0.15s ease-in-out 13 alternate;
+}
+@keyframes weaponStrobe {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Boot Screen */
+#boot-screen {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 1s ease;
+}
+#boot-screen.fade-out { opacity: 0; pointer-events: none; }
+#boot-text {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 14px;
+  color: var(--green);
+  white-space: pre-wrap;
+  max-width: 700px;
+  text-shadow: 0 0 8px rgba(0, 255, 65, 0.5);
+}
+.boot-line { opacity: 0; transition: opacity 0.3s; }
+.boot-line.visible { opacity: 1; }
+.boot-progress { color: var(--green-dim); }
+
+/* Main Layout */
+#main-ui {
+  display: none;
+  height: 100vh;
+  width: 100vw;
+  grid-template-rows: 48px 1fr 32px;
+  grid-template-columns: 1fr 380px;
+}
+#main-ui.active { display: grid; }
+
+/* Header */
+#header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+#header h1 {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 4px;
+  text-shadow: 0 0 12px rgba(0, 255, 65, 0.6);
+}
+.header-stats {
+  display: flex;
+  gap: 20px;
+  font-size: 11px;
+  color: var(--green-dim);
+}
+.header-stats span { display: flex; align-items: center; gap: 4px; }
+#status-badge {
+  padding: 4px 16px;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 3px;
+  letter-spacing: 2px;
+  transition: all 0.3s ease;
+}
+.status-normal { background: rgba(0,255,65,0.15); color: var(--green); border: 1px solid var(--green); }
+.status-suspicious { background: rgba(255,204,0,0.15); color: var(--yellow); border: 1px solid var(--yellow); }
+.status-critical { background: rgba(255,32,32,0.2); color: var(--red); border: 1px solid var(--red); animation: statusPulse 0.5s infinite alternate; }
+@keyframes statusPulse {
+  from { box-shadow: 0 0 8px rgba(255,32,32,0.4); }
+  to { box-shadow: 0 0 20px rgba(255,32,32,0.8); }
+}
+
+/* Video Area */
+#video-area {
+  position: relative;
+  overflow: hidden;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#webcam { display: none; }
+#output-canvas {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+/* Corner brackets */
+.corner-bracket {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  border-color: var(--green);
+  border-style: solid;
+  pointer-events: none;
+  z-index: 10;
+  transition: border-color 0.3s;
+}
+.corner-bracket.tl { top: 20px; left: 20px; border-width: 2px 0 0 2px; }
+.corner-bracket.tr { top: 20px; right: 20px; border-width: 2px 2px 0 0; }
+.corner-bracket.bl { bottom: 20px; left: 20px; border-width: 0 0 2px 2px; }
+.corner-bracket.br { bottom: 20px; right: 20px; border-width: 0 2px 2px 0; }
+.critical-brackets { border-color: var(--red) !important; }
+/* Crosshair */
+#crosshair {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 40px; height: 40px;
+  pointer-events: none;
+  z-index: 10;
+  opacity: 0.4;
+}
+#crosshair::before, #crosshair::after {
+  content: '';
+  position: absolute;
+  background: var(--green);
+}
+#crosshair::before { width: 1px; height: 100%; left: 50%; }
+#crosshair::after { height: 1px; width: 100%; top: 50%; }
+/* FPS & REC */
+#fps-display {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  font-size: 11px;
+  color: var(--green-dim);
+  z-index: 10;
+}
+#rec-indicator {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 12px;
+  color: var(--red);
+  z-index: 10;
+  display: none;
+  animation: recBlink 1s infinite;
+}
+@keyframes recBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+/* Confidence bar at bottom of video */
+#confidence-bar-container {
+  position: absolute;
+  bottom: 8px;
+  left: 20px;
+  right: 20px;
+  height: 6px;
+  background: rgba(0,0,0,0.6);
+  border: 1px solid var(--border);
+  z-index: 10;
+  border-radius: 2px;
+}
+#confidence-bar {
+  height: 100%;
+  width: 0%;
+  transition: width 0.3s, background 0.3s;
+  background: var(--green);
+  border-radius: 2px;
+}
+#confidence-label {
+  position: absolute;
+  bottom: 18px;
+  left: 20px;
+  font-size: 10px;
+  color: var(--green-dim);
+  z-index: 10;
+}
+/* Video Controls */
+#video-controls {
+  position: absolute;
+  bottom: 30px;
+  right: 20px;
+  display: flex;
+  gap: 6px;
+  z-index: 10;
+}
+.vid-btn {
+  background: rgba(0,0,0,0.6);
+  border: 1px solid var(--border);
+  color: var(--green);
+  padding: 3px 8px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.vid-btn:hover { border-color: var(--green); background: rgba(0,255,65,0.1); }
+.vid-btn.active { border-color: var(--green); background: rgba(0,255,65,0.15); }
+
+/* Right Sidebar */
+#sidebar {
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+#sidebar::-webkit-scrollbar { width: 4px; }
+#sidebar::-webkit-scrollbar-thumb { background: var(--border); }
+.panel {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 12px;
+}
+.panel-title {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--green);
+}
+.panel-title .dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+
+/* Threat Status Panel */
+#threat-cells {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.threat-cell {
+  padding: 6px 4px;
+  text-align: center;
+  font-size: 9px;
+  font-family: 'Orbitron', sans-serif;
+  font-weight: 700;
+  letter-spacing: 1px;
+  border: 1px solid var(--border);
+  opacity: 0.3;
+  transition: all 0.3s;
+}
+.threat-cell.active { opacity: 1; }
+.threat-cell.normal { border-color: var(--green); color: var(--green); }
+.threat-cell.normal.active { background: rgba(0,255,65,0.1); box-shadow: 0 0 10px rgba(0,255,65,0.3); }
+.threat-cell.suspicious { border-color: var(--yellow); color: var(--yellow); }
+.threat-cell.suspicious.active { background: rgba(255,204,0,0.1); box-shadow: 0 0 10px rgba(255,204,0,0.3); }
+.threat-cell.critical { border-color: var(--red); color: var(--red); }
+.threat-cell.critical.active { background: rgba(255,32,32,0.1); box-shadow: 0 0 10px rgba(255,32,32,0.3); }
+
+/* Confidence Meter */
+#confidence-meter {
+  margin-bottom: 4px;
+}
+#confidence-meter-bar {
+  width: 100%;
+  height: 8px;
+  background: rgba(0,0,0,0.4);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+#confidence-meter-fill {
+  height: 100%;
+  width: 0%;
+  transition: width 0.3s, background 0.3s;
+  background: var(--green);
+}
+#confidence-meter-text {
+  font-size: 10px;
+  margin-top: 2px;
+  color: var(--green-dim);
+}
+
+/* Detected Objects Panel */
+#objects-list {
+  font-size: 11px;
+  max-height: 80px;
+  overflow-y: auto;
+}
+.object-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  border-bottom: 1px solid rgba(10,58,10,0.3);
+}
+.object-item.weapon { color: var(--red); }
+.object-item.suspicious-obj { color: var(--yellow); }
+
+/* Follower Intel Panel */
+#follower-panel {
+  max-height: 250px;
+  overflow-y: auto;
+}
+.follower-card {
+  background: rgba(0,0,0,0.3);
+  border: 1px solid var(--border);
+  padding: 8px;
+  margin-bottom: 6px;
+  border-radius: 3px;
+  transition: border-color 0.3s;
+}
+.follower-card.high-risk { border-color: var(--red); }
+.follower-card.med-risk { border-color: var(--orange); }
+.follower-card.low-risk { border-color: var(--yellow); }
+.follower-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.follower-thumb {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+  border-radius: 2px;
+  background: #000;
+}
+.follower-name {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+}
+.follower-badge {
+  font-size: 8px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  margin-left: auto;
+}
+.badge-new { background: rgba(0,255,65,0.2); color: var(--green); border: 1px solid var(--green); }
+.badge-follower { background: rgba(255,119,0,0.2); color: var(--orange); border: 1px solid var(--orange); }
+.badge-confirmed { background: rgba(255,32,32,0.2); color: var(--red); border: 1px solid var(--red); }
+.follower-stats {
+  font-size: 10px;
+  color: var(--green-dim);
+  line-height: 1.6;
+}
+.follower-risk-bar {
+  height: 4px;
+  background: rgba(0,0,0,0.4);
+  border-radius: 2px;
+  margin: 4px 0;
+  overflow: hidden;
+}
+.follower-risk-fill {
+  height: 100%;
+  transition: width 0.5s;
+  border-radius: 2px;
+}
+.follower-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+.follower-btn {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 8px;
+  padding: 2px 6px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--green-dim);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.follower-btn:hover { border-color: var(--green); color: var(--green); }
+.follower-status { font-size: 10px; margin-top: 4px; }
+
+/* Settings Panel */
+#settings-panel { font-size: 11px; }
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+}
+.setting-row label { color: var(--green-dim); }
+.setting-input {
+  background: rgba(0,0,0,0.4);
+  border: 1px solid var(--border);
+  color: var(--green);
+  padding: 3px 6px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+  width: 160px;
+}
+.setting-input:focus { outline: none; border-color: var(--green); }
+.setting-toggle {
+  appearance: none;
+  width: 32px;
+  height: 16px;
+  background: rgba(0,0,0,0.4);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  position: relative;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.setting-toggle::after {
+  content: '';
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--green-dim);
+  top: 2px;
+  left: 2px;
+  transition: all 0.2s;
+}
+.setting-toggle:checked { border-color: var(--green); }
+.setting-toggle:checked::after { left: 18px; background: var(--green); }
+.setting-select {
+  background: rgba(0,0,0,0.4);
+  border: 1px solid var(--border);
+  color: var(--green);
+  padding: 3px 6px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+}
+.setting-btn {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--green);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.setting-btn:hover { border-color: var(--green); background: rgba(0,255,65,0.1); }
+.setting-btn.danger { border-color: var(--red); color: var(--red); }
+.setting-btn.danger:hover { background: rgba(255,32,32,0.1); }
+
+/* Incident Log */
+#incident-log {
+  max-height: 150px;
+  overflow-y: auto;
+  font-size: 10px;
+}
+.log-entry {
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(10,58,10,0.2);
+  line-height: 1.4;
+}
+.log-entry .log-time { color: var(--green-dim); }
+.log-entry.log-critical { color: var(--red); }
+.log-entry.log-suspicious { color: var(--yellow); }
+.log-entry.log-weapon { color: var(--red); font-weight: bold; }
+
+/* Recordings Panel */
+#recordings-list {
+  max-height: 100px;
+  overflow-y: auto;
+  font-size: 10px;
+}
+.rec-entry {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(10,58,10,0.2);
+}
+.rec-entry a {
+  color: var(--green);
+  text-decoration: none;
+  font-size: 9px;
+  border: 1px solid var(--border);
+  padding: 1px 4px;
+}
+.rec-entry a:hover { border-color: var(--green); }
+
+/* Footer */
+#footer {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  font-size: 10px;
+  color: var(--green-dim);
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+/* Glitch effect */
+@keyframes glitch {
+  0% { transform: translate(0); filter: none; }
+  20% { transform: translate(-2px, 1px); filter: hue-rotate(90deg); }
+  40% { transform: translate(1px, -1px); }
+  60% { transform: translate(-1px, 2px); filter: hue-rotate(-90deg); }
+  80% { transform: translate(2px, -2px); }
+  100% { transform: translate(0); filter: none; }
+}
+.glitch-effect { animation: glitch 0.1s ease-in-out infinite; }
+
+/* Orange pulse for follower panel */
+@keyframes orangePulse {
+  from { box-shadow: 0 0 5px rgba(255,119,0,0.3); }
+  to { box-shadow: 0 0 15px rgba(255,119,0,0.6); }
+}
+.follower-pulse { animation: orangePulse 0.5s ease-in-out 6 alternate; }
+
+/* Expand history */
+.follower-history {
+  display: none;
+  font-size: 9px;
+  color: var(--green-dim);
+  margin-top: 4px;
+  padding: 4px;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid var(--border);
+}
+.follower-history.open { display: block; }
+</style>
+</head>
+<body>
+
+<!-- Boot Screen -->
+<div id="boot-screen">
+  <div id="boot-text"></div>
+</div>
+
+<!-- Main UI -->
+<div id="main-ui">
+  <!-- Header -->
+  <div id="header">
+    <h1>&#9672; SENTINEL</h1>
+    <div class="header-stats">
+      <span>FPS: <b id="header-fps">--</b></span>
+      <span>PERSONS: <b id="header-persons">0</b></span>
+      <span>OBJECTS: <b id="header-objects">0</b></span>
+      <span>FOLLOWERS: <b id="header-followers">0</b></span>
+      <span>UPTIME: <b id="header-uptime">00:00:00</b></span>
+    </div>
+    <div id="status-badge" class="status-normal">NORMAL</div>
+  </div>
+
+  <!-- Video Area -->
+  <div id="video-area">
+    <video id="webcam" autoplay playsinline></video>
+    <canvas id="output-canvas"></canvas>
+    <div class="corner-bracket tl"></div>
+    <div class="corner-bracket tr"></div>
+    <div class="corner-bracket bl"></div>
+    <div class="corner-bracket br"></div>
+    <div id="crosshair"></div>
+    <div id="fps-display">FPS: --</div>
+    <div id="rec-indicator">&#9679; REC</div>
+    <div id="confidence-label">THREAT CONFIDENCE: 0%</div>
+    <div id="confidence-bar-container">
+      <div id="confidence-bar"></div>
+    </div>
+    <div id="video-controls">
+      <button class="vid-btn active" id="btn-nightvision" onclick="toggleNightVision()">NV</button>
+      <button class="vid-btn" id="btn-skeleton" onclick="toggleSkeleton()">SKEL</button>
+      <button class="vid-btn active" id="btn-boxes" onclick="toggleBoxes()">BOX</button>
+    </div>
+  </div>
+
+  <!-- Right Sidebar -->
+  <div id="sidebar">
+    <!-- Threat Status -->
+    <div class="panel">
+      <div class="panel-title"><span class="dot"></span>THREAT STATUS</div>
+      <div id="threat-cells">
+        <div class="threat-cell normal active" id="cell-normal">NORMAL</div>
+        <div class="threat-cell suspicious" id="cell-suspicious">SUSPICIOUS</div>
+        <div class="threat-cell critical" id="cell-critical">CRITICAL</div>
+      </div>
+      <div id="confidence-meter">
+        <div id="confidence-meter-bar"><div id="confidence-meter-fill"></div></div>
+        <div id="confidence-meter-text">CONFIDENCE: 0%</div>
+      </div>
+    </div>
+
+    <!-- Detected Objects -->
+    <div class="panel">
+      <div class="panel-title"><span class="dot"></span>DETECTED OBJECTS</div>
+      <div id="objects-list"><span style="color:var(--green-dim);font-size:10px;">No objects detected</span></div>
+    </div>
+
+    <!-- Follower Intel -->
+    <div class="panel">
+      <div class="panel-title"><span class="dot"></span>FOLLOWER INTEL</div>
+      <div id="follower-panel"><span style="color:var(--green-dim);font-size:10px;">No subjects tracked</span></div>
+    </div>
+
+    <!-- Settings -->
+    <div class="panel" id="settings-panel">
+      <div class="panel-title"><span class="dot"></span>SETTINGS</div>
+      <div class="setting-row">
+        <label>ntfy Topic:</label>
+        <input type="text" class="setting-input" id="ntfy-topic" placeholder="sentinel-XXXXX" style="width:110px;">
+        <button class="setting-btn" onclick="testNtfy()">TEST</button>
+      </div>
+      <div class="setting-row">
+        <label>Sensitivity:</label>
+        <select class="setting-select" id="sensitivity" onchange="saveSetting('sensitivity', this.value)">
+          <option value="low">LOW</option>
+          <option value="medium" selected>MEDIUM</option>
+          <option value="high">HIGH</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <label>Night Vision:</label>
+        <input type="checkbox" class="setting-toggle" id="toggle-nv" checked onchange="toggleNightVision()">
+      </div>
+      <div class="setting-row">
+        <label>Weapon Detection:</label>
+        <input type="checkbox" class="setting-toggle" id="toggle-weapon" checked onchange="saveSetting('weaponDetection', this.checked)">
+      </div>
+      <div class="setting-row">
+        <label>Follower Memory:</label>
+        <select class="setting-select" id="follower-memory" onchange="saveSetting('followerMemory', this.value)">
+          <option value="7">7 days</option>
+          <option value="14" selected>14 days</option>
+          <option value="30">30 days</option>
+          <option value="0">Forever</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <button class="setting-btn danger" onclick="clearFollowers()">CLEAR FOLLOWERS</button>
+        <button class="setting-btn" onclick="exportIncidentLog()">EXPORT LOG</button>
+        <button class="setting-btn" onclick="exportFollowerReport()">EXPORT REPORT</button>
+      </div>
+    </div>
+
+    <!-- Notification Log -->
+    <div class="panel">
+      <div class="panel-title"><span class="dot"></span>NOTIFICATION LOG</div>
+      <div id="notification-log" style="max-height:80px;overflow-y:auto;font-size:10px;">
+        <span style="color:var(--green-dim);">No notifications sent</span>
+      </div>
+    </div>
+
+    <!-- Recordings -->
+    <div class="panel">
+      <div class="panel-title"><span class="dot"></span>RECORDINGS</div>
+      <div id="recordings-list"><span style="color:var(--green-dim);font-size:10px;">No recordings</span></div>
+    </div>
+
+    <!-- Incident Log -->
+    <div class="panel">
+      <div class="panel-title"><span class="dot"></span>INCIDENT LOG</div>
+      <div id="incident-log"></div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div id="footer">
+    <span>SENTINEL AUTONOMOUS SAFETY SYSTEM v2.1</span>
+    <span id="footer-time"></span>
+    <span>MEDIAPIPE + COCO-SSD | NEURAL INFERENCE ACTIVE</span>
+  </div>
+</div>
+
+<script>
+// ==================== STATE ====================
+const STATE = {
+  nightVision: true,
+  showSkeleton: true,
+  showBoxes: true,
+  currentThreat: 'NORMAL',
+  confidence: 0,
+  fps: 0,
+  frameCount: 0,
+  lastFpsTime: performance.now(),
+  startTime: Date.now(),
+  poseReady: false,
+  cocoReady: false,
+  lastPoseResults: null,
+  lastCocoResults: [],
+  cocoFrameCounter: 0,
+  personInFrameSince: null,
+  lastBboxSize: 0,
+  bboxHistory: [],
+  keypointVelocities: [],
+  previousKeypoints: null,
+  previousKeypointTime: 0,
+  isRecording: false,
+  mediaRecorder: null,
+  recordedChunks: [],
+  recordings: [],
+  recordingStart: 0,
+  normalSince: null,
+  notifCooldowns: { CRITICAL: 0, SUSPICIOUS: 0 },
+  incidentLog: [],
+  notificationLog: [],
+  followers: {},
+  currentPersonFingerprint: null,
+  currentPersonStartTime: null,
+  settings: {
+    ntfyTopic: '',
+    sensitivity: 'medium',
+    nightVision: true,
+    weaponDetection: true,
+    followerMemory: 14
+  },
+  detectedObjects: [],
+  weaponDetected: false,
+  weaponLabel: '',
+  heldWeapon: false,
+};
+
+const WEAPON_CLASSES = {
+  'baseball bat': { level: 'CRITICAL', label: 'BAT DETECTED' },
+  'knife': { level: 'CRITICAL', label: 'KNIFE DETECTED' },
+  'scissors': { level: 'SUSPICIOUS', label: 'SHARP OBJECT' },
+};
+const SUSPICIOUS_CLASSES = ['bottle', 'umbrella', 'cell phone', 'sports ball'];
+
+// ==================== DOM REFS ====================
+const video = document.getElementById('webcam');
+const canvas = document.getElementById('output-canvas');
+const ctx = canvas.getContext('2d', { willReadFrequently: true });
+const offscreen = document.createElement('canvas');
+const offCtx = offscreen.getContext('2d', { willReadFrequently: true });
+
+// ==================== LOAD SETTINGS & FOLLOWERS ====================
+function loadSettings() {
+  try {
+    const s = JSON.parse(localStorage.getItem('sentinel_settings'));
+    if (s) Object.assign(STATE.settings, s);
+  } catch(e) {}
+  document.getElementById('ntfy-topic').value = STATE.settings.ntfyTopic || '';
+  document.getElementById('sensitivity').value = STATE.settings.sensitivity;
+  document.getElementById('toggle-nv').checked = STATE.settings.nightVision;
+  document.getElementById('toggle-weapon').checked = STATE.settings.weaponDetection;
+  document.getElementById('follower-memory').value = STATE.settings.followerMemory;
+  STATE.nightVision = STATE.settings.nightVision;
+}
+
+function saveSetting(key, value) {
+  STATE.settings[key] = value;
+  localStorage.setItem('sentinel_settings', JSON.stringify(STATE.settings));
+}
+
+function loadFollowers() {
+  try {
+    const f = JSON.parse(localStorage.getItem('sentinel_followers'));
+    if (f) STATE.followers = f;
+  } catch(e) {}
+  // Prune old followers based on memory setting
+  pruneFollowers();
+}
+
+function saveFollowers() {
+  localStorage.setItem('sentinel_followers', JSON.stringify(STATE.followers));
+}
+
+function pruneFollowers() {
+  const memDays = parseInt(STATE.settings.followerMemory);
+  if (memDays === 0) return;
+  const cutoff = Date.now() - memDays * 86400000;
+  for (const id in STATE.followers) {
+    if (new Date(STATE.followers[id].lastSeen).getTime() < cutoff) {
+      delete STATE.followers[id];
+    }
+  }
+  saveFollowers();
+}
+
+function clearFollowers() {
+  if (confirm('Clear entire follower database? This cannot be undone.')) {
+    STATE.followers = {};
+    saveFollowers();
+    renderFollowerPanel();
+    addLog('SYSTEM', 'Follower database cleared');
+  }
+}
+
+// ==================== BOOT SEQUENCE ====================
+async function bootSequence() {
+  loadSettings();
+  loadFollowers();
+  const followerCount = Object.keys(STATE.followers).length;
+  const lines = [
+    '> SENTINEL AUTONOMOUS SAFETY SYSTEM v2.1',
+    '> INITIALIZING NEURAL INFERENCE ENGINE...',
+    '> LOADING MEDIAPIPE POSE MODEL [████████████] 100%',
+    '> LOADING COCO-SSD OBJECT DETECTOR [████████████] 100%',
+    '> CALIBRATING THREAT ASSESSMENT MATRIX...',
+    `> LOADING FOLLOWER DATABASE... [${followerCount} SUBJECTS FOUND]`,
+    '> ESTABLISHING SECURE NOTIFICATION CHANNEL...',
+    '> ACTIVATING SURVEILLANCE PROTOCOLS...',
+    '> SYSTEM READY. MONITORING INITIATED.',
+  ];
+  const bootText = document.getElementById('boot-text');
+  for (let i = 0; i < lines.length; i++) {
+    const el = document.createElement('div');
+    el.className = 'boot-line';
+    el.textContent = lines[i];
+    bootText.appendChild(el);
+    await sleep(300);
+    el.classList.add('visible');
+  }
+  await sleep(800);
+  document.getElementById('boot-screen').classList.add('fade-out');
+  await sleep(1000);
+  document.getElementById('boot-screen').style.display = 'none';
+  document.getElementById('main-ui').classList.add('active');
+  initSystem();
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ==================== INIT ====================
+let pose, cocoModel;
+
+async function initSystem() {
+  // Start camera
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
+    });
+    video.srcObject = stream;
+    await video.play();
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    offscreen.width = canvas.width;
+    offscreen.height = canvas.height;
+  } catch(e) {
+    addLog('ERROR', 'Camera access denied: ' + e.message);
+    return;
+  }
+
+  // Init MediaPipe Pose
+  pose = new Pose({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+  });
+  pose.setOptions({
+    modelComplexity: 1,
+    smoothLandmarks: true,
+    minDetectionConfidence: 0.6,
+    minTrackingConfidence: 0.5,
+  });
+  pose.onResults(onPoseResults);
+  STATE.poseReady = true;
+  addLog('SYSTEM', 'MediaPipe Pose initialized');
+
+  // Init COCO-SSD
+  try {
+    cocoModel = await cocoSsd.load();
+    STATE.cocoReady = true;
+    addLog('SYSTEM', 'COCO-SSD object detector loaded');
+  } catch(e) {
+    addLog('ERROR', 'COCO-SSD failed to load: ' + e.message);
+  }
+
+  // Start main loop
+  addLog('SYSTEM', 'Monitoring initiated');
+  requestAnimationFrame(mainLoop);
+  setInterval(updateUptime, 1000);
+  setInterval(updateFooterTime, 1000);
+
+  // Save ntfy topic on change
+  document.getElementById('ntfy-topic').addEventListener('change', function() {
+    saveSetting('ntfyTopic', this.value);
+  });
+}
+
+// ==================== MAIN LOOP ====================
+async function mainLoop() {
+  const now = performance.now();
+
+  // FPS calculation
+  STATE.frameCount++;
+  if (now - STATE.lastFpsTime >= 1000) {
+    STATE.fps = STATE.frameCount;
+    STATE.frameCount = 0;
+    STATE.lastFpsTime = now;
+    document.getElementById('fps-display').textContent = `FPS: ${STATE.fps}`;
+    document.getElementById('header-fps').textContent = STATE.fps;
+  }
+
+  // Send frame to pose
+  if (STATE.poseReady && video.readyState >= 2) {
+    try { await pose.send({ image: video }); } catch(e) {}
+  }
+
+  // COCO-SSD every 3 frames
+  STATE.cocoFrameCounter++;
+  if (STATE.cocoReady && STATE.settings.weaponDetection && STATE.cocoFrameCounter % 3 === 0 && video.readyState >= 2) {
+    try {
+      STATE.lastCocoResults = await cocoModel.detect(video);
+    } catch(e) {}
+  }
+
+  // Render
+  render();
+
+  requestAnimationFrame(mainLoop);
+}
+
+// ==================== POSE RESULTS ====================
+function onPoseResults(results) {
+  STATE.lastPoseResults = results;
+}
+
+// ==================== RENDER ====================
+function render() {
+  const w = canvas.width;
+  const h = canvas.height;
+
+  // Draw video to offscreen
+  offCtx.drawImage(video, 0, 0, w, h);
+
+  if (STATE.nightVision) {
+    applyNightVision(offCtx, w, h);
+  }
+
+  // Copy to main canvas
+  ctx.drawImage(offscreen, 0, 0);
+
+  // Process detections
+  const poseResults = STATE.lastPoseResults;
+  const cocoResults = STATE.lastCocoResults || [];
+  let personDetected = false;
+  let personBbox = null;
+  let wristPositions = [];
+
+  // Draw pose
+  if (poseResults && poseResults.poseLandmarks) {
+    personDetected = true;
+    const landmarks = poseResults.poseLandmarks;
+
+    // Get wrist positions for weapon-held detection
+    const lWrist = landmarks[15];
+    const rWrist = landmarks[16];
+    if (lWrist) wristPositions.push({ x: lWrist.x * w, y: lWrist.y * h });
+    if (rWrist) wristPositions.push({ x: rWrist.x * w, y: rWrist.y * h });
+
+    // Calculate person bounding box from landmarks
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const lm of landmarks) {
+      minX = Math.min(minX, lm.x * w);
+      minY = Math.min(minY, lm.y * h);
+      maxX = Math.max(maxX, lm.x * w);
+      maxY = Math.max(maxY, lm.y * h);
+    }
+    personBbox = { x: minX - 20, y: minY - 20, w: maxX - minX + 40, h: maxY - minY + 40 };
+
+    // Skeleton
+    if (STATE.showSkeleton) {
+      drawSkeleton(ctx, landmarks, w, h);
+    }
+
+    // Calculate velocities
+    if (STATE.previousKeypoints) {
+      const dt = (performance.now() - STATE.previousKeypointTime) / 1000;
+      if (dt > 0) {
+        let totalVel = 0;
+        let count = 0;
+        for (let i = 0; i < landmarks.length; i++) {
+          const prev = STATE.previousKeypoints[i];
+          if (prev) {
+            const dx = (landmarks[i].x - prev.x) * w;
+            const dy = (landmarks[i].y - prev.y) * h;
+            totalVel += Math.sqrt(dx*dx + dy*dy) / dt;
+            count++;
+          }
+        }
+        STATE.keypointVelocities.push(count > 0 ? totalVel / count : 0);
+        if (STATE.keypointVelocities.length > 30) STATE.keypointVelocities.shift();
+      }
+    }
+    STATE.previousKeypoints = landmarks.map(l => ({ x: l.x, y: l.y }));
+    STATE.previousKeypointTime = performance.now();
+  }
+
+  // Process COCO-SSD results
+  STATE.detectedObjects = [];
+  STATE.weaponDetected = false;
+  STATE.weaponLabel = '';
+  STATE.heldWeapon = false;
+
+  for (const pred of cocoResults) {
+    const [bx, by, bw, bh] = pred.bbox;
+    const cls = pred.class;
+    const conf = Math.round(pred.score * 100);
+
+    if (cls === 'person') {
+      if (!personDetected) {
+        personDetected = true;
+        personBbox = { x: bx, y: by, w: bw, h: bh };
+      }
+      continue;
+    }
+
+    // Check weapons
+    if (WEAPON_CLASSES[cls]) {
+      STATE.weaponDetected = true;
+      STATE.weaponLabel = WEAPON_CLASSES[cls].label;
+      STATE.detectedObjects.push({ label: cls, conf, level: 'weapon', bbox: pred.bbox });
+
+      // Check if held
+      const held = isObjectHeld(pred.bbox, wristPositions);
+      if (held) STATE.heldWeapon = true;
+
+      if (STATE.showBoxes) {
+        drawWeaponBox(ctx, pred.bbox, WEAPON_CLASSES[cls].label, conf, held);
+      }
+    } else if (SUSPICIOUS_CLASSES.includes(cls)) {
+      STATE.detectedObjects.push({ label: cls, conf, level: 'suspicious', bbox: pred.bbox });
+      const held = isObjectHeld(pred.bbox, wristPositions);
+      if (STATE.showBoxes) {
+        drawSuspiciousBox(ctx, pred.bbox, cls.toUpperCase(), conf, held);
+      }
+    } else {
+      STATE.detectedObjects.push({ label: cls, conf, level: 'normal', bbox: pred.bbox });
+    }
+  }
+
+  // Person bounding box
+  if (personDetected && personBbox && STATE.showBoxes) {
+    const bboxColor = STATE.currentThreat === 'CRITICAL' ? '#ff2020' :
+                      STATE.currentThreat === 'SUSPICIOUS' ? '#ffcc00' : '#00ff41';
+    ctx.strokeStyle = bboxColor;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(personBbox.x, personBbox.y, personBbox.w, personBbox.h);
+  }
+
+  // Bbox size tracking
+  if (personBbox) {
+    const bboxSize = (personBbox.w * personBbox.h) / (w * h) * 100;
+    STATE.bboxHistory.push({ size: bboxSize, time: Date.now() });
+    if (STATE.bboxHistory.length > 150) STATE.bboxHistory.shift();
+
+    if (!STATE.personInFrameSince) STATE.personInFrameSince = Date.now();
+  } else {
+    STATE.personInFrameSince = null;
+    STATE.bboxHistory = [];
+    STATE.keypointVelocities = [];
+    STATE.previousKeypoints = null;
+  }
+
+  // Threat assessment
+  assessThreat(personDetected, personBbox, poseResults);
+
+  // Update detected objects panel
+  updateObjectsPanel();
+
+  // Update header
+  document.getElementById('header-persons').textContent = personDetected ? '1' : '0';
+  document.getElementById('header-objects').textContent = STATE.detectedObjects.length;
+  document.getElementById('header-followers').textContent = Object.keys(STATE.followers).length;
+
+  // Follower tracking
+  if (personDetected && personBbox) {
+    trackFollower(personBbox, w, h);
+  }
+
+  // Recording logic
+  handleRecording();
+
+  // Crosshair color
+  const ch = document.getElementById('crosshair');
+  ch.style.setProperty('--green', STATE.currentThreat === 'CRITICAL' ? '#ff2020' :
+    STATE.currentThreat === 'SUSPICIOUS' ? '#ffcc00' : '#00ff41');
+}
+
+// ==================== NIGHT VISION FILTER ====================
+function applyNightVision(c, w, h) {
+  const imageData = c.getImageData(0, 0, w, h);
+  const d = imageData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const y = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+    const noise = (Math.random() - 0.5) * 30;
+    d[i]   = Math.min(255, Math.max(0, y * 0.15 + noise));
+    d[i+1] = Math.min(255, Math.max(0, y * 1.1 + noise));
+    d[i+2] = Math.min(255, Math.max(0, y * 0.2 + noise));
+  }
+  // Scanlines
+  for (let row = 0; row < h; row += 3) {
+    const idx = row * w * 4;
+    for (let col = 0; col < w; col++) {
+      const px = idx + col * 4;
+      d[px]   = Math.round(d[px] * 0.92);
+      d[px+1] = Math.round(d[px+1] * 0.92);
+      d[px+2] = Math.round(d[px+2] * 0.92);
+    }
+  }
+  c.putImageData(imageData, 0, 0);
+
+  // Vignette
+  const grd = c.createRadialGradient(w/2, h/2, w*0.3, w/2, h/2, w*0.75);
+  grd.addColorStop(0, 'rgba(0,0,0,0)');
+  grd.addColorStop(1, 'rgba(0,0,0,0.7)');
+  c.fillStyle = grd;
+  c.fillRect(0, 0, w, h);
+}
+
+// ==================== SKELETON DRAWING ====================
+const POSE_CONNECTIONS = [
+  [11,12],[11,13],[13,15],[12,14],[14,16],
+  [11,23],[12,24],[23,24],[23,25],[24,26],
+  [25,27],[26,28],[27,29],[28,30],[29,31],[30,32],
+  [0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[5,6],[6,8],
+  [9,10]
+];
+
+function drawSkeleton(c, landmarks, w, h) {
+  c.strokeStyle = 'rgba(0,255,65,0.7)';
+  c.lineWidth = 2;
+  for (const [a, b] of POSE_CONNECTIONS) {
+    const la = landmarks[a];
+    const lb = landmarks[b];
+    if (la && lb && la.visibility > 0.5 && lb.visibility > 0.5) {
+      c.beginPath();
+      c.moveTo(la.x * w, la.y * h);
+      c.lineTo(lb.x * w, lb.y * h);
+      c.stroke();
+    }
+  }
+  // Draw joints
+  c.fillStyle = 'rgba(0,255,65,0.9)';
+  for (const lm of landmarks) {
+    if (lm.visibility > 0.5) {
+      c.beginPath();
+      c.arc(lm.x * w, lm.y * h, 3, 0, Math.PI * 2);
+      c.fill();
+    }
+  }
+}
+
+// ==================== WEAPON / OBJECT BOXES ====================
+function drawWeaponBox(c, bbox, label, conf, held) {
+  const [x, y, w, h] = bbox;
+  c.strokeStyle = '#ff2020';
+  c.lineWidth = 2;
+  c.setLineDash([6, 3]);
+  c.strokeRect(x, y, w, h);
+  c.setLineDash([]);
+
+  // Label
+  c.font = '12px "Share Tech Mono"';
+  const text = `${label} ${conf}%`;
+  const tw = c.measureText(text).width;
+  c.fillStyle = 'rgba(255,32,32,0.8)';
+  c.fillRect(x, y - 18, tw + 8, 16);
+  c.fillStyle = '#fff';
+  c.fillText(text, x + 4, y - 5);
+
+  if (held) {
+    c.fillStyle = 'rgba(255,0,0,0.9)';
+    c.font = 'bold 11px "Share Tech Mono"';
+    c.fillText('HELD WEAPON', x, y + h + 14);
+  }
+}
+
+function drawSuspiciousBox(c, bbox, label, conf, held) {
+  const [x, y, w, h] = bbox;
+  c.strokeStyle = '#ffcc00';
+  c.lineWidth = 1.5;
+  c.setLineDash([4, 4]);
+  c.strokeRect(x, y, w, h);
+  c.setLineDash([]);
+
+  c.font = '11px "Share Tech Mono"';
+  const text = `${label} ${conf}%`;
+  const tw = c.measureText(text).width;
+  c.fillStyle = 'rgba(255,204,0,0.7)';
+  c.fillRect(x, y - 16, tw + 8, 14);
+  c.fillStyle = '#000';
+  c.fillText(text, x + 4, y - 4);
+}
+
+function isObjectHeld(bbox, wristPositions) {
+  if (wristPositions.length === 0) return false;
+  const [bx, by, bw, bh] = bbox;
+  const margin = 30;
+  for (const wrist of wristPositions) {
+    if (wrist.x >= bx - margin && wrist.x <= bx + bw + margin &&
+        wrist.y >= by - margin && wrist.y <= by + bh + margin) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// ==================== THREAT ASSESSMENT ====================
+function assessThreat(personDetected, personBbox, poseResults) {
+  if (!personDetected) {
+    setThreatLevel('NORMAL', 0);
+    return;
+  }
+
+  const sens = STATE.settings.sensitivity;
+  const sensMulti = sens === 'high' ? 1.3 : sens === 'low' ? 0.7 : 1.0;
+
+  let proximityScore = 0;
+  let velocityScore = 0;
+  let postureScore = 0;
+  let weaponScore = 0;
+  let followerScore = 0;
+
+  const w = canvas.width;
+  const h = canvas.height;
+
+  // Proximity: how much of frame person covers
+  if (personBbox) {
+    const coverage = (personBbox.w * personBbox.h) / (w * h) * 100;
+    proximityScore = Math.min(100, coverage * 2);
+
+    // Rapid approach: bbox growth
+    if (STATE.bboxHistory.length > 10) {
+      const recent = STATE.bboxHistory.slice(-10);
+      const oldest = recent[0].size;
+      const newest = recent[recent.length - 1].size;
+      const timeDiff = (recent[recent.length - 1].time - recent[0].time) / 1000;
+      if (timeDiff > 0 && oldest > 0) {
+        const growthRate = (newest - oldest) / oldest;
+        if (growthRate > 0.4 && timeDiff < 2) {
+          proximityScore = 100;
+        }
+      }
+    }
+  }
+
+  // Velocity
+  if (STATE.keypointVelocities.length > 5) {
+    const recentVel = STATE.keypointVelocities.slice(-5);
+    const avgVel = recentVel.reduce((a,b) => a+b, 0) / recentVel.length;
+    velocityScore = Math.min(100, avgVel / 3);
+  }
+
+  // Posture
+  if (poseResults && poseResults.poseLandmarks) {
+    const lm = poseResults.poseLandmarks;
+    const nose = lm[0];
+    const lWrist = lm[15];
+    const rWrist = lm[16];
+    const lShoulder = lm[11];
+    const rShoulder = lm[12];
+
+    // Wrists above nose = aggressive
+    if (lWrist && rWrist && nose) {
+      if (lWrist.y < nose.y && rWrist.y < nose.y) {
+        postureScore = 100;
+      } else if (lWrist.y < (lShoulder ? lShoulder.y : 0.5) || rWrist.y < (rShoulder ? rShoulder.y : 0.5)) {
+        postureScore = 50;
+      }
+    }
+
+    // Loitering: in frame >8s without much movement
+    if (STATE.personInFrameSince) {
+      const inFrameSeconds = (Date.now() - STATE.personInFrameSince) / 1000;
+      if (inFrameSeconds > 8 && velocityScore < 20) {
+        postureScore = Math.max(postureScore, 40);
+      }
+    }
+  }
+
+  // Weapon
+  if (STATE.weaponDetected) {
+    weaponScore = 100;
+    if (STATE.heldWeapon) weaponScore = 100;
+  }
+
+  // Follower check
+  if (STATE.currentPersonFingerprint) {
+    const fp = findMatchingFollower(STATE.currentPersonFingerprint);
+    if (fp) {
+      const f = STATE.followers[fp];
+      const days = Object.keys(f.appearancesByDay || {}).length;
+      if (days >= 3) followerScore = 100;
+      else if (days >= 2) followerScore = 60;
+      else if (f.totalAppearances > 2) followerScore = 30;
+    }
+  }
+
+  // Confidence (0-100)
+  const confidence = Math.min(100, Math.round(
+    proximityScore * 0.2 +
+    velocityScore * 0.2 +
+    postureScore * 0.2 +
+    weaponScore * 0.3 +
+    followerScore * 0.1
+  ) * sensMulti);
+
+  // Determine level
+  let level = 'NORMAL';
+  if (STATE.weaponDetected) {
+    level = 'CRITICAL';
+  } else if (confidence >= 60 || (STATE.heldWeapon) ||
+    (personBbox && (personBbox.w * personBbox.h) / (w * h) > 0.5) ||
+    (postureScore >= 100 && velocityScore > 40)) {
+    level = 'CRITICAL';
+  } else if (confidence >= 25 || postureScore >= 40 || proximityScore >= 50 || followerScore >= 30) {
+    level = 'SUSPICIOUS';
+  }
+
+  setThreatLevel(level, confidence);
+}
+
+function setThreatLevel(level, confidence) {
+  const prevLevel = STATE.currentThreat;
+  STATE.currentThreat = level;
+  STATE.confidence = confidence;
+
+  // Update UI
+  const badge = document.getElementById('status-badge');
+  badge.textContent = level;
+  badge.className = level === 'CRITICAL' ? 'status-critical' :
+                    level === 'SUSPICIOUS' ? 'status-suspicious' : 'status-normal';
+
+  // Threat cells
+  document.getElementById('cell-normal').classList.toggle('active', level === 'NORMAL');
+  document.getElementById('cell-suspicious').classList.toggle('active', level === 'SUSPICIOUS');
+  document.getElementById('cell-critical').classList.toggle('active', level === 'CRITICAL');
+
+  // Confidence displays
+  const color = level === 'CRITICAL' ? '#ff2020' : level === 'SUSPICIOUS' ? '#ffcc00' : '#00ff41';
+  document.getElementById('confidence-bar').style.width = confidence + '%';
+  document.getElementById('confidence-bar').style.background = color;
+  document.getElementById('confidence-label').textContent = `THREAT CONFIDENCE: ${confidence}%`;
+  document.getElementById('confidence-label').style.color = color;
+  document.getElementById('confidence-meter-fill').style.width = confidence + '%';
+  document.getElementById('confidence-meter-fill').style.background = color;
+  document.getElementById('confidence-meter-text').textContent = `CONFIDENCE: ${confidence}%`;
+  document.getElementById('confidence-meter-text').style.color = color;
+
+  // Body effects
+  document.body.classList.toggle('critical-state', level === 'CRITICAL');
+  const videoArea = document.getElementById('video-area');
+  videoArea.classList.toggle('glitch-effect', level === 'CRITICAL');
+
+  // Corner brackets
+  document.querySelectorAll('.corner-bracket').forEach(el => {
+    el.classList.toggle('critical-brackets', level === 'CRITICAL');
+    el.style.borderColor = color;
+  });
+
+  // Weapon strobe
+  if (STATE.weaponDetected && prevLevel !== 'CRITICAL') {
+    document.body.classList.add('weapon-strobe');
+    setTimeout(() => document.body.classList.remove('weapon-strobe'), 2000);
+  }
+
+  // Track normal time for recording stop
+  if (level === 'NORMAL') {
+    if (!STATE.normalSince) STATE.normalSince = Date.now();
+  } else {
+    STATE.normalSince = null;
+  }
+
+  // Notifications
+  if (level !== prevLevel) {
+    if (level === 'CRITICAL' || level === 'SUSPICIOUS') {
+      addLog(level, `Threat level: ${level} (${confidence}%)${STATE.weaponDetected ? ' - ' + STATE.weaponLabel : ''}`);
+    }
+    sendThreatNotification(level, confidence);
+  }
+}
+
+// ==================== NOTIFICATIONS ====================
+async function sendNotification(level, message, extras = {}) {
+  const topic = STATE.settings.ntfyTopic;
+  if (!topic) return;
+
+  const headers = {
+    'Title': level === 'CRITICAL' ? 'SENTINEL CRITICAL' : 'SENTINEL ALERT',
+    'Priority': level === 'CRITICAL' ? 'urgent' : 'high',
+    'Tags': level === 'CRITICAL' ? 'rotating_light,sos' : 'warning',
+  };
+  if (extras.weaponDetected) {
+    headers['Tags'] += ',knife';
+    headers['Title'] = 'WEAPON DETECTED — SENTINEL';
+  }
+  if (extras.follower) {
+    headers['Tags'] += ',eyes';
+    headers['Title'] = 'KNOWN FOLLOWER DETECTED';
+  }
+  try {
+    await fetch(`https://ntfy.sh/${topic}`, {
+      method: 'POST', headers, body: message
+    });
+    addNotificationLog(level, message);
+  } catch(e) {
+    addNotificationLog('ERROR', 'Failed to send: ' + e.message);
+  }
+}
+
+function sendThreatNotification(level, confidence) {
+  const now = Date.now();
+  if (STATE.weaponDetected) {
+    // Bypass cooldown for weapons
+    sendNotification('CRITICAL',
+      `WEAPON DETECTED: ${STATE.weaponLabel}. Confidence: ${confidence}%. ${STATE.heldWeapon ? 'WEAPON IS HELD.' : ''}`,
+      { weaponDetected: true });
+    return;
+  }
+  if (level === 'CRITICAL' && now - STATE.notifCooldowns.CRITICAL > 15000) {
+    STATE.notifCooldowns.CRITICAL = now;
+    sendNotification('CRITICAL', `CRITICAL threat detected. Confidence: ${confidence}%`);
+  } else if (level === 'SUSPICIOUS' && now - STATE.notifCooldowns.SUSPICIOUS > 30000) {
+    STATE.notifCooldowns.SUSPICIOUS = now;
+    sendNotification('SUSPICIOUS', `Suspicious activity detected. Confidence: ${confidence}%`);
+  }
+}
+
+async function testNtfy() {
+  const topic = document.getElementById('ntfy-topic').value;
+  if (!topic) { alert('Enter a ntfy topic first'); return; }
+  saveSetting('ntfyTopic', topic);
+  try {
+    await fetch(`https://ntfy.sh/${topic}`, {
+      method: 'POST',
+      headers: { 'Title': 'SENTINEL TEST', 'Priority': 'default', 'Tags': 'white_check_mark' },
+      body: 'Test notification from SENTINEL system.'
+    });
+    addNotificationLog('TEST', 'Test notification sent to ' + topic);
+  } catch(e) {
+    alert('Failed: ' + e.message);
+  }
+}
+
+// ==================== FOLLOWER TRACKING ====================
+function generateFingerprint(personBbox, w, h) {
+  const now = new Date();
+  const timeBucket = Math.floor(now.getHours() / 2); // 2-hour buckets
+  const centerX = personBbox.x + personBbox.w / 2;
+  const approachDir = centerX < w * 0.33 ? 'L' : centerX > w * 0.66 ? 'R' : 'C';
+  const aspectRatio = personBbox.h / Math.max(1, personBbox.w);
+  const sizeBucket = aspectRatio < 2 ? 'S' : aspectRatio < 3 ? 'M' : 'L';
+  return `T${timeBucket}_${approachDir}_${sizeBucket}`;
+}
+
+function fingerprintSimilarity(a, b) {
+  if (a === b) return 100;
+  const partsA = a.split('_');
+  const partsB = b.split('_');
+  let score = 0;
+  // Time bucket (within 1 = close)
+  const tA = parseInt(partsA[0].substring(1));
+  const tB = parseInt(partsB[0].substring(1));
+  if (tA === tB) score += 40;
+  else if (Math.abs(tA - tB) <= 1) score += 25;
+  // Direction
+  if (partsA[1] === partsB[1]) score += 35;
+  // Size
+  if (partsA[2] === partsB[2]) score += 25;
+  return score;
+}
+
+function findMatchingFollower(fingerprint) {
+  let bestMatch = null;
+  let bestScore = 0;
+  for (const id in STATE.followers) {
+    const f = STATE.followers[id];
+    if (f.markedSafe) continue;
+    const sim = fingerprintSimilarity(fingerprint, f.fingerprint || '');
+    if (sim > bestScore && sim >= 70) {
+      bestScore = sim;
+      bestMatch = id;
+    }
+  }
+  return bestMatch;
+}
+
+function trackFollower(personBbox, w, h) {
+  const fingerprint = generateFingerprint(personBbox, w, h);
+  STATE.currentPersonFingerprint = fingerprint;
+
+  const today = new Date().toISOString().split('T')[0];
+  const matchId = findMatchingFollower(fingerprint);
+
+  if (matchId) {
+    // Update existing follower
+    const f = STATE.followers[matchId];
+    f.lastSeen = new Date().toISOString();
+    f.totalAppearances++;
+    f.appearancesByDay[today] = (f.appearancesByDay[today] || 0) + 1;
+
+    if (STATE.personInFrameSince) {
+      f.totalTimeInFrame += 1; // approx per frame update
+    }
+
+    // Approach speed
+    if (STATE.keypointVelocities.length > 0) {
+      const avgVel = STATE.keypointVelocities.reduce((a,b)=>a+b,0) / STATE.keypointVelocities.length;
+      f.avgApproachSpeed = avgVel > 150 ? 'fast' : avgVel > 50 ? 'moderate' : 'slow';
+    }
+
+    // Max proximity
+    const coverage = (personBbox.w * personBbox.h) / (w * h) * 100;
+    f.maxProximity = Math.max(f.maxProximity || 0, Math.round(coverage));
+
+    // Objects
+    if (STATE.weaponDetected && STATE.weaponLabel) {
+      if (!f.objectsDetected.includes(STATE.weaponLabel)) {
+        f.objectsDetected.push(STATE.weaponLabel);
+      }
+    }
+    for (const obj of STATE.detectedObjects) {
+      if (obj.level !== 'normal' && !f.objectsDetected.includes(obj.label)) {
+        f.objectsDetected.push(obj.label);
+      }
+    }
+
+    // Threat history
+    if (!f.threatLevelHistory.includes(STATE.currentThreat.toLowerCase())) {
+      f.threatLevelHistory.push(STATE.currentThreat.toLowerCase());
+    }
+
+    // Risk score
+    f.riskScore = calculateRiskScore(f);
+
+    // Alerts
+    const days = Object.keys(f.appearancesByDay).length;
+    const todayApps = f.appearancesByDay[today] || 0;
+
+    // Check consecutive days
+    const sortedDays = Object.keys(f.appearancesByDay).sort();
+    let consecutiveDays = 1;
+    for (let i = sortedDays.length - 1; i > 0; i--) {
+      const d1 = new Date(sortedDays[i]);
+      const d2 = new Date(sortedDays[i-1]);
+      const diff = (d1 - d2) / 86400000;
+      if (diff <= 1) consecutiveDays++;
+      else break;
+    }
+
+    // Generate notes
+    f.notes = `Appeared ${days} day(s). ${f.objectsDetected.length > 0 ? 'Objects: ' + f.objectsDetected.join(', ') + '.' : ''}`;
+
+    // Notifications for follower events (once per session per subject)
+    if (!f._sessionNotified) {
+      if (consecutiveDays >= 3) {
+        sendNotification('CRITICAL', `CONFIRMED FOLLOWER: Subject ${matchId}. Seen ${consecutiveDays} consecutive days. Risk: ${f.riskScore}`, { follower: true });
+        addLog('CRITICAL', `CONFIRMED FOLLOWER: ${matchId} (${consecutiveDays} days, risk ${f.riskScore})`);
+        f._sessionNotified = true;
+      } else if (days >= 2) {
+        sendNotification('SUSPICIOUS', `POSSIBLE FOLLOWER: Subject ${matchId}. Seen on ${days} different days.`, { follower: true });
+        addLog('SUSPICIOUS', `POSSIBLE FOLLOWER: ${matchId} (${days} days)`);
+        f._sessionNotified = true;
+      } else if (todayApps >= 2 && !f._repeatNotified) {
+        addLog('SUSPICIOUS', `REPEAT PRESENCE: ${matchId} (${todayApps}x today)`);
+        f._repeatNotified = true;
+      }
+    }
+
+    // Armed known threat
+    if (STATE.weaponDetected && !f._armedNotified) {
+      sendNotification('CRITICAL', `ARMED KNOWN THREAT: Subject ${matchId} with ${STATE.weaponLabel}. Risk: ${f.riskScore}`, { weaponDetected: true, follower: true });
+      addLog('CRITICAL', `ARMED KNOWN THREAT: ${matchId} with ${STATE.weaponLabel}`);
+      f._armedNotified = true;
+    }
+
+    saveFollowers();
+  } else {
+    // Create new follower
+    const id = 'follower_' + String(Object.keys(STATE.followers).length + 1).padStart(3, '0');
+    const f = {
+      id,
+      fingerprint,
+      firstSeen: new Date().toISOString(),
+      lastSeen: new Date().toISOString(),
+      totalAppearances: 1,
+      appearancesByDay: { [today]: 1 },
+      totalTimeInFrame: 0,
+      avgApproachSpeed: 'unknown',
+      maxProximity: Math.round((personBbox.w * personBbox.h) / (w * h) * 100),
+      threatLevelHistory: [STATE.currentThreat.toLowerCase()],
+      objectsDetected: [],
+      notes: '',
+      riskScore: 0,
+      thumbnail: captureThumb(personBbox),
+      markedSafe: false,
+    };
+    f.riskScore = calculateRiskScore(f);
+    STATE.followers[id] = f;
+    STATE.currentPersonFingerprint = fingerprint;
+    saveFollowers();
+    addLog('INFO', `New subject tracked: ${id}`);
+  }
+
+  // Throttle UI updates
+  if (!STATE._followerUITimer) {
+    STATE._followerUITimer = setTimeout(() => {
+      renderFollowerPanel();
+      STATE._followerUITimer = null;
+    }, 2000);
+  }
+}
+
+function calculateRiskScore(f) {
+  const apps = f.totalAppearances || 0;
+  const days = Object.keys(f.appearancesByDay || {}).length;
+  const sortedDays = Object.keys(f.appearancesByDay || {}).sort();
+  let consecutiveDays = 1;
+  for (let i = sortedDays.length - 1; i > 0; i--) {
+    const d1 = new Date(sortedDays[i]);
+    const d2 = new Date(sortedDays[i-1]);
+    if ((d1 - d2) / 86400000 <= 1) consecutiveDays++;
+    else break;
+  }
+  const weaponDetected = f.objectsDetected && f.objectsDetected.some(o =>
+    ['BAT DETECTED', 'KNIFE DETECTED', 'baseball bat', 'knife'].includes(o));
+
+  let score = (apps > 5 ? 30 : apps * 6) +
+    (consecutiveDays * 15) +
+    (weaponDetected ? 35 : 0) +
+    (f.avgApproachSpeed === 'fast' ? 10 : 0) +
+    ((f.maxProximity || 0) > 60 ? 10 : 0);
+  return Math.min(100, score);
+}
+
+function captureThumb(bbox) {
+  try {
+    const tc = document.createElement('canvas');
+    tc.width = 48;
+    tc.height = 48;
+    const tctx = tc.getContext('2d');
+    // Crop from video
+    tctx.drawImage(video,
+      Math.max(0, bbox.x), Math.max(0, bbox.y),
+      Math.min(bbox.w, video.videoWidth), Math.min(bbox.h, video.videoHeight),
+      0, 0, 48, 48);
+    return tc.toDataURL('image/jpeg', 0.4);
+  } catch(e) { return ''; }
+}
+
+// ==================== FOLLOWER PANEL UI ====================
+function renderFollowerPanel() {
+  const panel = document.getElementById('follower-panel');
+  const entries = Object.values(STATE.followers)
+    .filter(f => !f.markedSafe)
+    .sort((a, b) => b.riskScore - a.riskScore);
+
+  if (entries.length === 0) {
+    panel.innerHTML = '<span style="color:var(--green-dim);font-size:10px;">No subjects tracked</span>';
+    return;
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+
+  panel.innerHTML = entries.map(f => {
+    const days = Object.keys(f.appearancesByDay || {}).length;
+    const sortedDays = Object.keys(f.appearancesByDay || {}).sort();
+    let consecutiveDays = 1;
+    for (let i = sortedDays.length - 1; i > 0; i--) {
+      const d1 = new Date(sortedDays[i]);
+      const d2 = new Date(sortedDays[i-1]);
+      if ((d1 - d2) / 86400000 <= 1) consecutiveDays++;
+      else break;
+    }
+
+    const riskClass = f.riskScore >= 70 ? 'high-risk' : f.riskScore >= 40 ? 'med-risk' : 'low-risk';
+    const riskColor = f.riskScore >= 70 ? '#ff2020' : f.riskScore >= 40 ? '#ff7700' : '#ffcc00';
+
+    let badgeText = '';
+    let badgeClass = 'badge-new';
+    if (consecutiveDays >= 3) { badgeText = 'CONFIRMED FOLLOWER'; badgeClass = 'badge-confirmed'; }
+    else if (days >= 2) { badgeText = 'POSSIBLE FOLLOWER'; badgeClass = 'badge-follower'; }
+    else if ((f.appearancesByDay[today] || 0) >= 2) { badgeText = 'REPEAT'; badgeClass = 'badge-follower'; }
+
+    const isNewToday = f.appearancesByDay[today] && days > 1;
+
+    const firstDate = new Date(f.firstSeen);
+    const lastDate = new Date(f.lastSeen);
+    const fmtFirst = firstDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const fmtLast = lastDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    // Day-by-day history
+    const historyLines = Object.entries(f.appearancesByDay || {})
+      .sort(([a],[b]) => a.localeCompare(b))
+      .map(([day, count]) => `${day}: ${count} appearances`)
+      .join('<br>');
+
+    return `<div class="follower-card ${riskClass}">
+      <div class="follower-header">
+        ${f.thumbnail ? `<img class="follower-thumb" src="${f.thumbnail}" alt="">` : '<div class="follower-thumb"></div>'}
+        <div>
+          <div class="follower-name">SUBJECT ${f.id.replace('follower_','#')}</div>
+          ${badgeText ? `<span class="follower-badge ${badgeClass}">${badgeText}</span>` : ''}
+          ${isNewToday ? '<span class="follower-badge badge-new">NEW TODAY</span>' : ''}
+        </div>
+      </div>
+      <div class="follower-risk-bar"><div class="follower-risk-fill" style="width:${f.riskScore}%;background:${riskColor}"></div></div>
+      <div class="follower-stats">
+        Risk Score: ${f.riskScore}<br>
+        First Seen: ${fmtFirst}<br>
+        Last Seen: ${fmtLast}<br>
+        Appearances: ${f.totalAppearances} across ${days} day(s)<br>
+        ${f.objectsDetected.length ? 'Objects: ' + f.objectsDetected.join(', ') + '<br>' : ''}
+        ${f.avgApproachSpeed !== 'unknown' ? 'Approach: ' + f.avgApproachSpeed + '<br>' : ''}
+      </div>
+      <div class="follower-history" id="hist-${f.id}">${historyLines}</div>
+      <div class="follower-actions">
+        <button class="follower-btn" onclick="toggleHistory('${f.id}')">VIEW HISTORY</button>
+        <button class="follower-btn" onclick="markSafe('${f.id}')">MARK SAFE</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleHistory(id) {
+  const el = document.getElementById('hist-' + id);
+  if (el) el.classList.toggle('open');
+}
+
+function markSafe(id) {
+  if (STATE.followers[id]) {
+    STATE.followers[id].markedSafe = true;
+    saveFollowers();
+    renderFollowerPanel();
+    addLog('INFO', `Subject ${id} marked as safe`);
+  }
+}
+
+// ==================== DETECTED OBJECTS PANEL ====================
+function updateObjectsPanel() {
+  const list = document.getElementById('objects-list');
+  if (STATE.detectedObjects.length === 0) {
+    list.innerHTML = '<span style="color:var(--green-dim);font-size:10px;">No objects detected</span>';
+    return;
+  }
+  list.innerHTML = STATE.detectedObjects.map(obj => {
+    const cls = obj.level === 'weapon' ? 'weapon' : obj.level === 'suspicious' ? 'suspicious-obj' : '';
+    return `<div class="object-item ${cls}"><span>${obj.label.toUpperCase()}</span><span>${obj.conf}%</span></div>`;
+  }).join('');
+}
+
+// ==================== AUTO RECORDING ====================
+function handleRecording() {
+  const shouldRecord = STATE.currentThreat === 'SUSPICIOUS' || STATE.currentThreat === 'CRITICAL';
+
+  if (shouldRecord && !STATE.isRecording) {
+    startRecording();
+  }
+
+  if (STATE.isRecording) {
+    const elapsed = Date.now() - STATE.recordingStart;
+    const normalFor = STATE.normalSince ? (Date.now() - STATE.normalSince) : 0;
+
+    // Stop after 10s OR normal for 5s
+    if ((elapsed > 10000 && normalFor > 5000) || elapsed > 30000) {
+      stopRecording();
+    }
+  }
+}
+
+function startRecording() {
+  try {
+    const stream = canvas.captureStream(30);
+    STATE.mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm; codecs=vp9' });
+    STATE.recordedChunks = [];
+    STATE.mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) STATE.recordedChunks.push(e.data);
+    };
+    STATE.mediaRecorder.onstop = () => {
+      const blob = new Blob(STATE.recordedChunks, { type: 'video/webm' });
+      const url = URL.createObjectURL(blob);
+      const now = new Date();
+      const timeStr = now.toTimeString().substring(0, 8).replace(/:/g, '-');
+      const prefix = STATE.weaponDetected ? 'WEAPON_' : '';
+      const fname = `sentinel_${prefix}${STATE.currentThreat}_${timeStr}.webm`;
+
+      STATE.recordings.push({
+        url, name: fname,
+        time: now.toLocaleTimeString(),
+        level: STATE.currentThreat,
+        weapon: STATE.weaponDetected,
+        duration: Math.round((Date.now() - STATE.recordingStart) / 1000)
+      });
+
+      // Max 20
+      if (STATE.recordings.length > 20) {
+        const old = STATE.recordings.shift();
+        URL.revokeObjectURL(old.url);
+      }
+
+      renderRecordings();
+      addLog('INFO', `Recording saved: ${fname}`);
+    };
+    STATE.mediaRecorder.start(100);
+    STATE.isRecording = true;
+    STATE.recordingStart = Date.now();
+    document.getElementById('rec-indicator').style.display = 'block';
+    addLog('INFO', 'Recording started');
+  } catch(e) {
+    addLog('ERROR', 'Recording failed: ' + e.message);
+  }
+}
+
+function stopRecording() {
+  if (STATE.mediaRecorder && STATE.mediaRecorder.state !== 'inactive') {
+    STATE.mediaRecorder.stop();
+  }
+  STATE.isRecording = false;
+  document.getElementById('rec-indicator').style.display = 'none';
+}
+
+function renderRecordings() {
+  const list = document.getElementById('recordings-list');
+  if (STATE.recordings.length === 0) {
+    list.innerHTML = '<span style="color:var(--green-dim);font-size:10px;">No recordings</span>';
+    return;
+  }
+  list.innerHTML = STATE.recordings.slice().reverse().map(r => {
+    const levelColor = r.level === 'CRITICAL' ? 'var(--red)' : r.level === 'SUSPICIOUS' ? 'var(--yellow)' : 'var(--green)';
+    return `<div class="rec-entry">
+      <span style="color:${levelColor}">${r.weapon ? 'WPN ' : ''}${r.level} ${r.time} (${r.duration}s)</span>
+      <a href="${r.url}" download="${r.name}">DL</a>
+    </div>`;
+  }).join('');
+}
+
+// ==================== LOGGING ====================
+function addLog(level, message) {
+  const now = new Date().toLocaleTimeString();
+  const entry = { time: now, level, message };
+  STATE.incidentLog.push(entry);
+  if (STATE.incidentLog.length > 500) STATE.incidentLog.shift();
+
+  const log = document.getElementById('incident-log');
+  const cls = level === 'CRITICAL' ? 'log-critical' :
+              level === 'SUSPICIOUS' ? 'log-suspicious' :
+              (level === 'WEAPON' ? 'log-weapon' : '');
+  const el = document.createElement('div');
+  el.className = `log-entry ${cls}`;
+  el.innerHTML = `<span class="log-time">[${now}]</span> [${level}] ${message}`;
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+}
+
+function addNotificationLog(level, message) {
+  const now = new Date().toLocaleTimeString();
+  STATE.notificationLog.push({ time: now, level, message });
+  const log = document.getElementById('notification-log');
+  if (STATE.notificationLog.length === 1) log.innerHTML = '';
+  const el = document.createElement('div');
+  el.className = 'log-entry';
+  el.style.color = level === 'CRITICAL' ? 'var(--red)' : level === 'ERROR' ? 'var(--red)' : 'var(--yellow)';
+  el.innerHTML = `<span class="log-time">[${now}]</span> ${message}`;
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+}
+
+// ==================== TOGGLES ====================
+function toggleNightVision() {
+  STATE.nightVision = !STATE.nightVision;
+  document.getElementById('btn-nightvision').classList.toggle('active', STATE.nightVision);
+  document.getElementById('toggle-nv').checked = STATE.nightVision;
+  saveSetting('nightVision', STATE.nightVision);
+}
+
+function toggleSkeleton() {
+  STATE.showSkeleton = !STATE.showSkeleton;
+  document.getElementById('btn-skeleton').classList.toggle('active', STATE.showSkeleton);
+}
+
+function toggleBoxes() {
+  STATE.showBoxes = !STATE.showBoxes;
+  document.getElementById('btn-boxes').classList.toggle('active', STATE.showBoxes);
+}
+
+// ==================== EXPORTS ====================
+function exportIncidentLog() {
+  const data = JSON.stringify(STATE.incidentLog, null, 2);
+  downloadJSON(data, 'sentinel_incident_log.json');
+}
+
+function exportFollowerReport() {
+  const data = JSON.stringify(STATE.followers, null, 2);
+  downloadJSON(data, 'sentinel_follower_report.json');
+}
+
+function downloadJSON(data, filename) {
+  const blob = new Blob([data], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ==================== UTILITIES ====================
+function updateUptime() {
+  const elapsed = Math.floor((Date.now() - STATE.startTime) / 1000);
+  const h = String(Math.floor(elapsed / 3600)).padStart(2, '0');
+  const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0');
+  const s = String(elapsed % 60).padStart(2, '0');
+  document.getElementById('header-uptime').textContent = `${h}:${m}:${s}`;
+}
+
+function updateFooterTime() {
+  document.getElementById('footer-time').textContent = new Date().toLocaleString();
+}
+
+// ==================== START ====================
+document.addEventListener('DOMContentLoaded', bootSequence);
+</script>
+</body>
+</html>

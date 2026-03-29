@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SENTINEL — Backend-Connected Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+:root {
+  --green: #00ff41; --green-dim: #00aa2a; --yellow: #ffcc00;
+  --orange: #ff7700; --red: #ff2020; --bg: #060a06;
+  --panel: #080d08; --border: #0a3a0a;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: var(--bg); color: var(--green);
+  font-family: 'Share Tech Mono', monospace;
+  height: 100vh; overflow: hidden;
+}
+body::after {
+  content:''; position:fixed; inset:0; pointer-events:none; z-index:9999;
+  background: repeating-linear-gradient(0deg, rgba(0,0,0,0.08) 0px, rgba(0,0,0,0.08) 1px, transparent 1px, transparent 3px);
+}
+body.critical-state { animation: critBorder .5s ease-in-out infinite alternate; }
+@keyframes critBorder { from{box-shadow:inset 0 0 30px rgba(255,32,32,.3)} to{box-shadow:inset 0 0 60px rgba(255,32,32,.6)} }
+
+#app { display:grid; height:100vh; grid-template-rows:48px 1fr 32px; grid-template-columns:1fr 380px; }
+
+/* Header */
+#header {
+  grid-column:1/-1; display:flex; align-items:center; justify-content:space-between;
+  padding:0 16px; border-bottom:1px solid var(--border); background:var(--panel);
+}
+#header h1 { font-family:'Orbitron',sans-serif; font-size:18px; font-weight:900; letter-spacing:4px; text-shadow:0 0 12px rgba(0,255,65,.6); }
+.stats { display:flex; gap:16px; font-size:11px; color:var(--green-dim); }
+.stats b { color:var(--green); }
+#status-badge {
+  padding:4px 16px; font-family:'Orbitron',sans-serif; font-size:12px; font-weight:700;
+  border-radius:3px; letter-spacing:2px; transition:all .3s;
+}
+.s-normal { background:rgba(0,255,65,.15); color:var(--green); border:1px solid var(--green); }
+.s-suspicious { background:rgba(255,204,0,.15); color:var(--yellow); border:1px solid var(--yellow); }
+.s-critical { background:rgba(255,32,32,.2); color:var(--red); border:1px solid var(--red); animation:pulse .5s infinite alternate; }
+@keyframes pulse { from{box-shadow:0 0 8px rgba(255,32,32,.4)} to{box-shadow:0 0 20px rgba(255,32,32,.8)} }
+
+/* Video */
+#video-area { position:relative; background:#000; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+#video-feed { max-width:100%; max-height:100%; object-fit:contain; }
+.corner { position:absolute; width:40px; height:40px; border-color:var(--green); border-style:solid; pointer-events:none; z-index:10; transition:border-color .3s; }
+.tl { top:20px; left:20px; border-width:2px 0 0 2px; }
+.tr { top:20px; right:20px; border-width:2px 2px 0 0; }
+.bl { bottom:40px; left:20px; border-width:0 0 2px 2px; }
+.br { bottom:40px; right:20px; border-width:0 2px 2px 0; }
+#fps-overlay { position:absolute; top:8px; left:8px; font-size:11px; color:var(--green-dim); z-index:10; }
+#rec-dot { position:absolute; top:8px; right:8px; font-size:12px; color:var(--red); z-index:10; display:none; animation:blink 1s infinite; }
+@keyframes blink { 50%{opacity:0} }
+#conf-bar-wrap { position:absolute; bottom:8px; left:20px; right:20px; height:6px; background:rgba(0,0,0,.6); border:1px solid var(--border); z-index:10; border-radius:2px; }
+#conf-bar { height:100%; width:0%; transition:width .3s, background .3s; background:var(--green); border-radius:2px; }
+#conf-label { position:absolute; bottom:18px; left:20px; font-size:10px; color:var(--green-dim); z-index:10; }
+#crosshair { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:40px; height:40px; pointer-events:none; z-index:10; opacity:.4; }
+#crosshair::before,#crosshair::after { content:''; position:absolute; background:var(--green); }
+#crosshair::before { width:1px; height:100%; left:50%; }
+#crosshair::after { height:1px; width:100%; top:50%; }
+
+/* Sidebar */
+#sidebar {
+  overflow-y:auto; border-left:1px solid var(--border); background:var(--panel);
+  display:flex; flex-direction:column;
+}
+#sidebar::-webkit-scrollbar { width:4px; }
+#sidebar::-webkit-scrollbar-thumb { background:var(--border); }
+.panel { border-bottom:1px solid var(--border); padding:10px 12px; }
+.panel-title {
+  font-family:'Orbitron',sans-serif; font-size:10px; font-weight:700;
+  letter-spacing:2px; margin-bottom:8px; display:flex; align-items:center; gap:6px;
+}
+.panel-title .dot { width:6px; height:6px; border-radius:50%; background:var(--green); box-shadow:0 0 6px var(--green); }
+
+/* Threat cells */
+.threat-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:4px; margin-bottom:8px; }
+.tcell {
+  padding:6px 4px; text-align:center; font-size:9px; font-family:'Orbitron',sans-serif;
+  font-weight:700; letter-spacing:1px; border:1px solid var(--border); opacity:.3; transition:all .3s;
+}
+.tcell.active { opacity:1; }
+.tcell.t-normal { border-color:var(--green); color:var(--green); }
+.tcell.t-normal.active { background:rgba(0,255,65,.1); box-shadow:0 0 10px rgba(0,255,65,.3); }
+.tcell.t-suspicious { border-color:var(--yellow); color:var(--yellow); }
+.tcell.t-suspicious.active { background:rgba(255,204,0,.1); box-shadow:0 0 10px rgba(255,204,0,.3); }
+.tcell.t-critical { border-color:var(--red); color:var(--red); }
+.tcell.t-critical.active { background:rgba(255,32,32,.1); box-shadow:0 0 10px rgba(255,32,32,.3); }
+
+/* Meter */
+.meter { height:8px; background:rgba(0,0,0,.4); border:1px solid var(--border); border-radius:2px; overflow:hidden; }
+.meter-fill { height:100%; width:0%; transition:width .3s, background .3s; background:var(--green); }
+.meter-text { font-size:10px; margin-top:2px; color:var(--green-dim); }
+
+/* ML panel */
+.ml-row { display:flex; justify-content:space-between; font-size:10px; padding:2px 0; }
+.ml-bar { width:60%; height:6px; background:rgba(0,0,0,.3); border-radius:2px; margin-top:3px; overflow:hidden; }
+.ml-bar-fill { height:100%; transition:width .3s; border-radius:2px; }
+
+/* Objects */
+.obj-item { display:flex; justify-content:space-between; padding:2px 0; font-size:11px; border-bottom:1px solid rgba(10,58,10,.2); }
+.obj-weapon { color:var(--red); } .obj-suspicious { color:var(--yellow); }
+
+/* Follower cards */
+.f-card { background:rgba(0,0,0,.3); border:1px solid var(--border); padding:8px; margin-bottom:6px; border-radius:3px; }
+.f-card.high { border-color:var(--red); } .f-card.med { border-color:var(--orange); } .f-card.low { border-color:var(--yellow); }
+.f-name { font-family:'Orbitron',sans-serif; font-size:10px; font-weight:700; }
+.f-stats { font-size:10px; color:var(--green-dim); line-height:1.6; }
+.f-risk { height:4px; background:rgba(0,0,0,.4); border-radius:2px; margin:4px 0; overflow:hidden; }
+.f-risk-fill { height:100%; border-radius:2px; transition:width .5s; }
+.f-badge { font-size:8px; padding:1px 5px; border-radius:2px; }
+.badge-confirmed { background:rgba(255,32,32,.2); color:var(--red); border:1px solid var(--red); }
+.badge-follower { background:rgba(255,119,0,.2); color:var(--orange); border:1px solid var(--orange); }
+.badge-repeat { background:rgba(255,204,0,.2); color:var(--yellow); border:1px solid var(--yellow); }
+.f-btn { font-family:'Share Tech Mono',monospace; font-size:8px; padding:2px 6px; background:transparent; border:1px solid var(--border); color:var(--green-dim); cursor:pointer; }
+.f-btn:hover { border-color:var(--green); color:var(--green); }
+
+/* Settings */
+.set-row { display:flex; align-items:center; justify-content:space-between; padding:4px 0; font-size:11px; }
+.set-input { background:rgba(0,0,0,.4); border:1px solid var(--border); color:var(--green); padding:3px 6px; font-family:'Share Tech Mono',monospace; font-size:11px; }
+.set-input:focus { outline:none; border-color:var(--green); }
+.set-select { background:rgba(0,0,0,.4); border:1px solid var(--border); color:var(--green); padding:3px 6px; font-family:'Share Tech Mono',monospace; font-size:11px; }
+.set-btn { font-family:'Share Tech Mono',monospace; font-size:10px; padding:3px 8px; background:transparent; border:1px solid var(--border); color:var(--green); cursor:pointer; }
+.set-btn:hover { border-color:var(--green); background:rgba(0,255,65,.1); }
+.set-btn.danger { border-color:var(--red); color:var(--red); }
+.set-btn.danger:hover { background:rgba(255,32,32,.1); }
+
+/* Log */
+.log { max-height:150px; overflow-y:auto; font-size:10px; }
+.log-entry { padding:3px 0; border-bottom:1px solid rgba(10,58,10,.2); line-height:1.4; }
+.log-time { color:var(--green-dim); }
+.log-crit { color:var(--red); } .log-susp { color:var(--yellow); }
+
+/* Footer */
+#footer {
+  grid-column:1/-1; display:flex; align-items:center; justify-content:space-between;
+  padding:0 16px; font-size:10px; color:var(--green-dim);
+  border-top:1px solid var(--border); background:var(--panel);
+}
+
+/* Boot */
+#boot { position:fixed; inset:0; background:var(--bg); z-index:10000; display:flex; align-items:center; justify-content:center; transition:opacity 1s; }
+#boot.fade { opacity:0; pointer-events:none; }
+#boot-text { font-size:14px; white-space:pre-wrap; max-width:700px; text-shadow:0 0 8px rgba(0,255,65,.5); }
+.boot-line { opacity:0; transition:opacity .3s; }
+.boot-line.vis { opacity:1; }
+
+/* Connection indicator */
+.conn { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
+.conn.on { background:var(--green); box-shadow:0 0 6px var(--green); }
+.conn.off { background:var(--red); box-shadow:0 0 6px var(--red); }
+</style>
+</head>
+<body>
+
+<div id="boot"><div id="boot-text"></div></div>
+
+<div id="app">
+  <div id="header">
+    <h1>&#9672; SENTINEL</h1>
+    <div class="stats">
+      <span><span class="conn off" id="conn-dot"></span>BACKEND</span>
+      <span>FPS: <b id="s-fps">--</b></span>
+      <span>PERSONS: <b id="s-persons">0</b></span>
+      <span>OBJECTS: <b id="s-objects">0</b></span>
+      <span>FOLLOWERS: <b id="s-followers">0</b></span>
+    </div>
+    <div id="status-badge" class="s-normal">NORMAL</div>
+  </div>
+
+  <div id="video-area">
+    <img id="video-feed" alt="SENTINEL Feed">
+    <div class="corner tl"></div><div class="corner tr"></div>
+    <div class="corner bl"></div><div class="corner br"></div>
+    <div id="crosshair"></div>
+    <div id="fps-overlay">FPS: --</div>
+    <div id="rec-dot">&#9679; REC</div>
+    <div id="conf-label">THREAT CONFIDENCE: 0%</div>
+    <div id="conf-bar-wrap"><div id="conf-bar"></div></div>
+  </div>
+
+  <div id="sidebar">
+    <!-- Threat Status -->
+    <div class="panel">
+      <div class="panel-title"><span class="dot"></span>THREAT STATUS</div>
+      <div class="threat-grid">
+        <div class="tcell t-normal active" id="c-normal">NORMAL</div>
+        <div class="tcell t-suspicious" id="c-suspicious">SUSPICIOUS</div>
+        <div class="tcell t-critical" id="c-critical">CRITICAL</div>
+      </div>
+      <div class="meter"><div class="meter-fill" id="conf-meter"></div></div>
+      <div class="meter-text" id="conf-meter-text">CONFIDENCE: 0%</div>
+    </div>
+
+    <!-- ML Model Output -->
+    <div class="panel">
+      <div class="panel-title"><span class="dot"></span>ML MODEL OUTPUT</div>
+      <div id="ml-output">
+        <div class="ml-row"><span>Normal</span><div class="ml-bar"><div class="ml-bar-fill" id="ml-normal" style="width:0%;background:var(--green)"></div></div><span id="ml-normal-pct">--</span></div>
+        <div class="ml-row"><span>Suspicious</span><div class="ml-bar"><div class="ml-bar-fill" id="ml-suspicious" style="width:0%;background:var(--yellow)"></div></div><span id="ml-suspicious-pct">--</span></div>
+        <div class="ml-row"><span>Critical</span><div class="ml-bar"><div class="ml-bar-fill" id="ml-critical" style="width:0%;background:var(--red)"></div></div><span id="ml-critical-pct">--</span></div>
+        <div class="ml-row" style="margin-top:4px;border-top:1px solid var(--border);padding-top:4px;">
+          <span>Anomaly Score</span><span id="ml-anomaly">0.000</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Detected Objects -->
+    <div class="panel">
+      <div class="panel-title"><span class="dot"></span>DETECTED OBJECTS</div>
+      <div id="objects-list" style="max-height:80px;overflow-y:auto;font-size:11px;">
+        <span style="color:var(--green-dim);font-size:10px;">No objects</span>
+      </div>
+    </div>
+
+    <!-- Follower Intel -->
+    <div class="panel">
+      <div class="panel-title"><span class="dot"></span>FOLLOWER INTEL</div>
+      <div id="follower-panel" style="max-height:200px;overflow-y:auto;">
+        <span style="color:var(--green-dim);font-size:10px;">No subjects tracked</span>
+      </div>
+    </div>
+
+    <!-- Settings -->
+    <div class="panel">
+      <div class="panel-title"><span class="dot"></span>SETTINGS</div>
+      <div class="set-row"><label>ntfy Topic:</label><input type="text" class="set-input" id="ntfy-topic" style="width:110px;"><button class="set-btn" onclick="testNtfy()">TEST</button></div>
+      <div class="set-row"><label>Sensitivity:</label>
+        <select class="set-select" id="sensitivity" onchange="sendCmd('set_sensitivity',this.value)">
+          <option value="low">LOW</option><option value="medium" selected>MEDIUM</option><option value="high">HIGH</option>
+        </select>
+      </div>
+      <div class="set-row"><label>Night Vision:</label><input type="checkbox" id="nv-toggle" checked onchange="sendCmd('set_night_vision',this.checked)"></div>
+      <div class="set-row">
+        <button class="set-btn danger" onclick="clearFollowers()">CLEAR FOLLOWERS</button>
+        <button class="set-btn" onclick="exportLog()">EXPORT LOG</button>
+        <button class="set-btn" onclick="trainAll()">TRAIN MODELS</button>
+      </div>
+    </div>
+
+    <!-- IoT Devices -->
+    <div class="panel">
+      <div class="panel-title"><span class="dot"></span>IoT DEVICES</div>
+      <div id="iot-panel" style="font-size:10px;">
+        <div class="set-row"><span>MQTT:</span><span id="iot-mqtt" style="color:var(--red)">DISCONNECTED</span></div>
+        <div class="set-row"><span>Devices:</span><span id="iot-dev-count">0 online</span></div>
+        <div id="iot-device-list" style="max-height:60px;overflow-y:auto;margin:4px 0;"></div>
+      </div>
+    </div>
+
+    <!-- Security Zones -->
+    <div class="panel">
+      <div class="panel-title"><span class="dot"></span>SECURITY ZONES</div>
+      <div id="zone-panel" style="font-size:10px;max-height:100px;overflow-y:auto;"></div>
+      <div style="margin-top:6px;display:flex;gap:4px;">
+        <button class="set-btn" onclick="armAll()">ARM ALL</button>
+        <button class="set-btn danger" onclick="disarmAll()">DISARM ALL</button>
+        <button class="set-btn danger" onclick="lockdown()">LOCKDOWN</button>
+      </div>
+    </div>
+
+    <!-- Incident Log -->
+    <div class="panel">
+      <div class="panel-title"><span class="dot"></span>INCIDENT LOG</div>
+      <div id="incident-log" class="log"></div>
+    </div>
+  </div>
+
+  <div id="footer">
+    <span>SENTINEL v2.1 — PYTHON BACKEND</span>
+    <span id="footer-time"></span>
+    <span>MEDIAPIPE + YOLOv8 + PYTORCH ML</span>
+  </div>
+</div>
+
+<script>
+let ws = null;
+let reconnectTimer = null;
+const logEntries = [];
+
+// Boot sequence
+async function boot() {
+  const lines = [
+    '> SENTINEL AUTONOMOUS SAFETY SYSTEM v2.1',
+    '> CONNECTING TO PYTHON BACKEND...',
+    '> LOADING MEDIAPIPE POSE + YOLOv8 DETECTORS...',
+    '> LOADING PYTORCH ML MODELS...',
+    '> INITIALIZING THREAT ASSESSMENT MATRIX...',
+    '> LOADING FOLLOWER DATABASE...',
+    '> ESTABLISHING WEBSOCKET STREAM...',
+    '> SYSTEM READY. MONITORING INITIATED.',
+  ];
+  const el = document.getElementById('boot-text');
+  for (const line of lines) {
+    const d = document.createElement('div');
+    d.className = 'boot-line';
+    d.textContent = line;
+    el.appendChild(d);
+    await new Promise(r => setTimeout(r, 250));
+    d.classList.add('vis');
+  }
+  await new Promise(r => setTimeout(r, 600));
+  document.getElementById('boot').classList.add('fade');
+  await new Promise(r => setTimeout(r, 800));
+  document.getElementById('boot').style.display = 'none';
+  connectWS();
+  setInterval(() => {
+    document.getElementById('footer-time').textContent = new Date().toLocaleString();
+  }, 1000);
+}
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws/stream`);
+
+  ws.onopen = () => {
+    document.getElementById('conn-dot').classList.replace('off', 'on');
+    addLog('SYSTEM', 'Backend connected');
+  };
+
+  ws.onclose = () => {
+    document.getElementById('conn-dot').classList.replace('on', 'off');
+    addLog('SYSTEM', 'Backend disconnected — reconnecting...');
+    reconnectTimer = setTimeout(connectWS, 3000);
+  };
+
+  ws.onerror = () => {};
+
+  ws.onmessage = (evt) => {
+    try {
+      const msg = JSON.parse(evt.data);
+      if (msg.type === 'frame') handleFrame(msg);
+    } catch(e) {}
+  };
+}
+
+function handleFrame(msg) {
+  // Video feed
+  if (msg.frame) {
+    document.getElementById('video-feed').src = 'data:image/jpeg;base64,' + msg.frame;
+  }
+
+  const d = msg.data;
+  if (!d) return;
+
+  // Stats
+  document.getElementById('s-fps').textContent = d.fps;
+  document.getElementById('fps-overlay').textContent = 'FPS: ' + d.fps;
+  document.getElementById('s-persons').textContent = d.persons;
+  document.getElementById('s-objects').textContent = d.objects ? d.objects.length : 0;
+
+  // Threat level
+  const level = d.threat_level;
+  const conf = d.confidence;
+  const color = level === 'CRITICAL' ? 'var(--red)' : level === 'SUSPICIOUS' ? 'var(--yellow)' : 'var(--green)';
+
+  const badge = document.getElementById('status-badge');
+  badge.textContent = level;
+  badge.className = level === 'CRITICAL' ? 's-critical' : level === 'SUSPICIOUS' ? 's-suspicious' : 's-normal';
+
+  document.getElementById('c-normal').classList.toggle('active', level === 'NORMAL');
+  document.getElementById('c-suspicious').classList.toggle('active', level === 'SUSPICIOUS');
+  document.getElementById('c-critical').classList.toggle('active', level === 'CRITICAL');
+
+  document.getElementById('conf-bar').style.width = conf + '%';
+  document.getElementById('conf-bar').style.background = color;
+  document.getElementById('conf-label').textContent = `THREAT CONFIDENCE: ${conf}%`;
+  document.getElementById('conf-label').style.color = color;
+  document.getElementById('conf-meter').style.width = conf + '%';
+  document.getElementById('conf-meter').style.background = color;
+  document.getElementById('conf-meter-text').textContent = `CONFIDENCE: ${conf}%`;
+
+  document.body.classList.toggle('critical-state', level === 'CRITICAL');
+  document.querySelectorAll('.corner').forEach(c => c.style.borderColor = color);
+
+  // Recording
+  document.getElementById('rec-dot').style.display = d.recording ? 'block' : 'none';
+
+  // ML probs
+  if (d.ml_probs) {
+    const mp = d.ml_probs;
+    document.getElementById('ml-normal').style.width = (mp.normal * 100) + '%';
+    document.getElementById('ml-normal-pct').textContent = (mp.normal * 100).toFixed(1) + '%';
+    document.getElementById('ml-suspicious').style.width = (mp.suspicious * 100) + '%';
+    document.getElementById('ml-suspicious-pct').textContent = (mp.suspicious * 100).toFixed(1) + '%';
+    document.getElementById('ml-critical').style.width = (mp.critical * 100) + '%';
+    document.getElementById('ml-critical-pct').textContent = (mp.critical * 100).toFixed(1) + '%';
+  }
+  document.getElementById('ml-anomaly').textContent = (d.anomaly_score || 0).toFixed(4);
+
+  // Objects
+  const objList = document.getElementById('objects-list');
+  if (d.objects && d.objects.length > 0) {
+    objList.innerHTML = d.objects.map(o => {
+      const cls = o.level === 'weapon' ? 'obj-weapon' : o.level === 'suspicious' ? 'obj-suspicious' : '';
+      return `<div class="obj-item ${cls}"><span>${o.label.toUpperCase()}</span><span>${o.confidence}%</span></div>`;
+    }).join('');
+  } else {
+    objList.innerHTML = '<span style="color:var(--green-dim);font-size:10px;">No objects</span>';
+  }
+
+  // Follower
+  if (d.follower && d.follower.id) {
+    updateFollowerPanel(d.follower);
+  }
+}
+
+function updateFollowerPanel(f) {
+  // Periodic full refresh via REST
+  if (!updateFollowerPanel._timer) {
+    updateFollowerPanel._timer = setInterval(async () => {
+      try {
+        const res = await fetch('/api/followers');
+        const followers = await res.json();
+        renderFollowers(followers);
+        document.getElementById('s-followers').textContent = followers.length;
+      } catch(e) {}
+    }, 3000);
+  }
+}
+
+function renderFollowers(followers) {
+  const panel = document.getElementById('follower-panel');
+  if (!followers.length) {
+    panel.innerHTML = '<span style="color:var(--green-dim);font-size:10px;">No subjects tracked</span>';
+    return;
+  }
+  panel.innerHTML = followers.map(f => {
+    const rc = f.riskScore >= 70 ? 'high' : f.riskScore >= 40 ? 'med' : 'low';
+    const rcolor = f.riskScore >= 70 ? 'var(--red)' : f.riskScore >= 40 ? 'var(--orange)' : 'var(--yellow)';
+    const days = Object.keys(f.appearancesByDay || {}).length;
+    return `<div class="f-card ${rc}">
+      <div class="f-name">SUBJECT ${f.id.replace('follower_','#')}</div>
+      <div class="f-risk"><div class="f-risk-fill" style="width:${f.riskScore}%;background:${rcolor}"></div></div>
+      <div class="f-stats">
+        Risk: ${f.riskScore} | Apps: ${f.totalAppearances} across ${days} day(s)<br>
+        ${f.objectsDetected && f.objectsDetected.length ? 'Objects: ' + f.objectsDetected.join(', ') : ''}
+      </div>
+      <button class="f-btn" onclick="markSafe('${f.id}')">MARK SAFE</button>
+    </div>`;
+  }).join('');
+}
+
+function sendCmd(command, value) {
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ command, value }));
+  }
+}
+
+function testNtfy() {
+  const topic = document.getElementById('ntfy-topic').value;
+  if (!topic) { alert('Enter topic first'); return; }
+  sendCmd('set_ntfy_topic', topic);
+  sendCmd('test_ntfy', topic);
+  addLog('INFO', 'Test notification sent');
+}
+
+async function markSafe(id) {
+  await fetch(`/api/followers/${id}/mark-safe`, { method: 'POST' });
+  addLog('INFO', `${id} marked safe`);
+}
+
+async function clearFollowers() {
+  if (!confirm('Clear all followers?')) return;
+  await fetch('/api/followers', { method: 'DELETE' });
+  addLog('SYSTEM', 'Followers cleared');
+}
+
+async function exportLog() {
+  const res = await fetch('/api/incidents/export');
+  const data = await res.json();
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'sentinel_log.json'; a.click();
+}
+
+async function trainAll() {
+  if (!confirm('Start training all ML models? This runs in the background.')) return;
+  await fetch('/api/train/all', { method: 'POST' });
+  addLog('SYSTEM', 'ML training started in background');
+}
+
+function addLog(level, message) {
+  const time = new Date().toLocaleTimeString();
+  const log = document.getElementById('incident-log');
+  const cls = level === 'CRITICAL' ? 'log-crit' : level === 'SUSPICIOUS' ? 'log-susp' : '';
+  const el = document.createElement('div');
+  el.className = `log-entry ${cls}`;
+  el.innerHTML = `<span class="log-time">[${time}]</span> [${level}] ${message}`;
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+}
+
+// IoT functions
+async function armAll() {
+  await fetch('/api/iot/arm-all', {method:'POST'});
+  addLog('SYSTEM','All zones armed');
+  refreshIoT();
+}
+async function disarmAll() {
+  if(!confirm('Disarm all security zones?'))return;
+  await fetch('/api/iot/disarm-all', {method:'POST'});
+  addLog('SYSTEM','All zones disarmed');
+  refreshIoT();
+}
+async function lockdown() {
+  if(!confirm('ACTIVATE FULL LOCKDOWN?'))return;
+  await fetch('/api/iot/lockdown', {method:'POST'});
+  addLog('CRITICAL','LOCKDOWN ACTIVATED');
+  refreshIoT();
+}
+async function armZone(z) {
+  await fetch(`/api/iot/zones/${z}/arm`, {method:'POST'});
+  refreshIoT();
+}
+async function disarmZone(z) {
+  await fetch(`/api/iot/zones/${z}/disarm`, {method:'POST'});
+  refreshIoT();
+}
+
+async function refreshIoT() {
+  try {
+    const res = await fetch('/api/iot/status');
+    const s = await res.json();
+    if(s.error) return;
+
+    document.getElementById('iot-mqtt').textContent = s.mqtt_connected ? 'CONNECTED' : 'DISCONNECTED';
+    document.getElementById('iot-mqtt').style.color = s.mqtt_connected ? 'var(--green)' : 'var(--red)';
+    const devs = s.devices || {};
+    document.getElementById('iot-dev-count').textContent = `${devs.online||0}/${devs.total||0} online`;
+
+    const dl = document.getElementById('iot-device-list');
+    if(devs.list && devs.list.length) {
+      dl.innerHTML = devs.list.map(d =>
+        `<div style="display:flex;justify-content:space-between;padding:1px 0;border-bottom:1px solid var(--border);">` +
+        `<span style="color:${d.online?'var(--green)':'var(--red)'}">${d.online?'●':'○'} ${d.device_id}</span>` +
+        `<span style="color:var(--green-dim)">${d.device_type}</span></div>`
+      ).join('');
+    } else { dl.innerHTML = '<span style="color:var(--green-dim)">No devices</span>'; }
+
+    const zp = document.getElementById('zone-panel');
+    const zones = s.zones || {};
+    const zk = Object.keys(zones);
+    if(zk.length) {
+      zp.innerHTML = zk.map(k => {
+        const z = zones[k];
+        const tc = z.threat_level==='CRITICAL'?'var(--red)':z.threat_level==='SUSPICIOUS'?'var(--yellow)':'var(--green)';
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid var(--border);">` +
+          `<span style="color:${tc}">${z.armed?'🔒':'🔓'} ${z.name}</span>` +
+          `<span style="color:var(--green-dim)">${z.device_count} dev | ${z.motion_today} motion</span>` +
+          `<button class="f-btn" onclick="${z.armed?`disarmZone('${k}')`:`armZone('${k}')`}">${z.armed?'DISARM':'ARM'}</button>` +
+          `</div>`;
+      }).join('');
+    } else { zp.innerHTML = '<span style="color:var(--green-dim)">No zones configured</span>'; }
+  } catch(e) {}
+}
+
+// Refresh IoT status periodically
+setInterval(refreshIoT, 5000);
+
+document.addEventListener('DOMContentLoaded', boot);
+</script>
+</body>
+</html>
